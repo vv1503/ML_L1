@@ -1,11 +1,4 @@
 # -*- coding: utf-8 -*-
-"""
-Лабораторная работа №1. Часть 1: описание датасета и EDA.
-Датасет: Home Value Insights (house_price_regression_dataset.csv).
-
-Порядок по ТЗ: загрузка → распределения → корреляции → VIF.
-Разбиение train/test и модели — в laba1_models.py.
-"""
 
 import os
 import sys
@@ -126,14 +119,6 @@ def main():
     price_corr = corr_matrix["Цена дома"].drop("Цена дома").sort_values(ascending=False)
     print("\nКорреляция признаков с целевой переменной (Цена дома):")
     print(price_corr.round(3).to_string())
-
-    r_sqft = float(price_corr.loc["Площадь"])
-    print(
-        f"\nКритическое замечание: корреляция Площадь–Цена r = {r_sqft:.3f}. "
-        "Для реальных цен на жильё такая почти идеальная линейность "
-        "обычно не встречается — датасет, скорее всего, синтетический "
-        "(цена почти линейно задаётся от площади)."
-    )
 
     X_features = df.drop(columns=["Цена дома"])
     scaler = StandardScaler()

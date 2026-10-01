@@ -1,9 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Лабораторная работа №1. Часть 2: подготовка данных, регрессия, PCA, сравнение.
-Датасет: Home Value Insights (house_price_regression_dataset.csv).
-"""
-
 import os
 import sys
 
@@ -16,7 +10,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from sklearn.model_selection import train_test_split, KFold, cross_val_score, GridSearchCV
+from sklearn.model_selection import train_test_split, KFold, cross_val_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LinearRegression, Ridge, Lasso
 from sklearn.decomposition import PCA
@@ -30,68 +24,14 @@ plt.rcParams["axes.labelsize"] = 11
 plt.rcParams["figure.dpi"] = 110
 
 
-def label_component(loadings_col):
-    """Содержательная подпись ГК по доминирующим факторным нагрузкам (после PCA)."""
-    ranked = loadings_col.abs().sort_values(ascending=False)
-    top_names = list(ranked.index[:3])
-    top_vals = loadings_col.loc[top_names]
-
-    def signed(name):
-        return f"{name} ({loadings_col[name]:+.2f})"
-
-    # Именование по смыслу топ-признаков
-    if top_names[0] == "Год постройки" and ranked.iloc[0] > 0.6:
-        title = "Фактор новизны дома"
-    elif set(top_names[:2]) >= {"Площадь", "Участок"} or (
-        "Площадь" in top_names[:2] and "Участок" in top_names[:2]
-    ):
-        title = "Фактор площади дома и участка"
-    elif top_names[0] == "Гараж" or (
-        "Гараж" in top_names[:2] and "Спальни" in top_names[:2]
-    ):
-        title = "Гаражно-планировочный профиль"
-    elif "Качество района" in top_names[:2] and "Ванные" in top_names[:2]:
-        if top_vals["Ванные"] * top_vals["Качество района"] > 0:
-            title = "Качество района и комфорт санузлов"
-        else:
-            title = "Район и гараж vs число ванных"
-    elif top_names[0] == "Качество района":
-        title = "Район и гараж vs число ванных"
-    elif top_names[0] == "Спальни":
-        title = "Спальный профиль планировки"
-    else:
-        title = "Смешанный фактор: " + ", ".join(top_names[:2])
-
-    detail = ", ".join(signed(n) for n in top_names)
-    return title, detail
-
-
-def eval_models(models, X_tr, X_te, y_tr, y_te, kf, feature_names):
-    results = {}
-    preds = {}
-    for name, model in models.items():
-        cv_scores = cross_val_score(model, X_tr, y_tr, cv=kf, scoring="r2")
-        model.fit(X_tr, y_tr)
-        y_pred = model.predict(X_te)
-        preds[name] = y_pred
-        results[name] = {
-            "R2_CV_mean": float(cv_scores.mean()),
-            "R2_CV_std": float(cv_scores.std()),
-            "R2_Test": float(r2_score(y_te, y_pred)),
-            "RMSE_Test": float(np.sqrt(mean_squared_error(y_te, y_pred))),
-            "MAPE_Test": float(mean_absolute_percentage_error(y_te, y_pred)),
-            "intercept": float(model.intercept_),
-            "coefficients": {
-                col: float(coef) for col, coef in zip(feature_names, model.coef_)
-            },
-        }
-        print(
-            f"{name:<48} | R^2(CV): {cv_scores.mean():.4f} | "
-            f"R^2(Тест): {results[name]['R2_Test']:.4f} | "
-            f"RMSE: {results[name]['RMSE_Test']:.2f} $ | "
-            f"MAPE: {results[name]['MAPE_Test'] * 100:.2f}%"
-        )
-    return results, preds
+PC_LABELS = {
+    1: "Гаражно-планировочный профиль",
+    2: "Фактор площади дома и участка",
+    3: "Качество района и комфорт санузлов",
+    4: "Фактор новизны дома",
+    5: "Район и гараж vs число ванных",
+    6: "Спальный профиль планировки",
+}
 
 
 def main():
@@ -127,73 +67,60 @@ def main():
 
     kf = KFold(n_splits=5, shuffle=True, random_state=42)
 
-    # --- Подбор alpha для Ridge и Lasso ---
-    alpha_grid = {
-        "alpha": [0.01, 0.1, 1.0, 10.0, 50.0, 100.0, 500.0, 1000.0]
-    }
-
-    ridge_search = GridSearchCV(
-        Ridge(random_state=42), alpha_grid, cv=kf, scoring="r2", n_jobs=-1
-    )
-    ridge_search.fit(X_train_scaled, y_train)
-    best_ridge_alpha = float(ridge_search.best_params_["alpha"])
-
-    lasso_search = GridSearchCV(
-        Lasso(max_iter=20000, random_state=42), alpha_grid, cv=kf, scoring="r2", n_jobs=-1
-    )
-    lasso_search.fit(X_train_scaled, y_train)
-    best_lasso_alpha = float(lasso_search.best_params_["alpha"])
-
-    print("=== Подбор гиперпараметров (GridSearchCV, 5-fold, метрика R^2) ===")
-    print(f"Лучший alpha для Ridge: {best_ridge_alpha} (CV R^2 = {ridge_search.best_score_:.4f})")
-    print(f"Лучший alpha для Lasso: {best_lasso_alpha} (CV R^2 = {lasso_search.best_score_:.4f})")
-    print("Сетка alpha:", alpha_grid["alpha"])
-
     model_lin = LinearRegression()
-    model_ridge = Ridge(alpha=best_ridge_alpha, random_state=42)
-    model_lasso = Lasso(alpha=best_lasso_alpha, max_iter=20000, random_state=42)
+    model_ridge = Ridge(alpha=1.0, random_state=42)
+    model_lasso = Lasso(alpha=1.0, max_iter=10000, random_state=42)
 
     models_orig = {
         "Линейная регрессия (OLS)": model_lin,
-        f"Гребневая регрессия (Ridge, alpha={best_ridge_alpha:g})": model_ridge,
-        f"Лассо регрессия (Lasso, alpha={best_lasso_alpha:g})": model_lasso,
+        "Гребневая регрессия (Ridge, alpha=1)": model_ridge,
+        "Лассо регрессия (Lasso, alpha=1)": model_lasso,
     }
 
-    print("\n=== Обучение моделей на исходных стандартизированных признаках ===")
-    results_orig, preds_orig = eval_models(
-        models_orig, X_train_scaled, X_test_scaled, y_train, y_test, kf, feature_names
-    )
+    results_orig = {}
+    preds_orig = {}
 
-    print(
-        "\nКритическое замечание: R^2 ≈ 0.998 и корреляция Площадь–Цена ≈ 0.99 "
-        "для реальных цен на жильё почти нереальны. Высокое качество здесь "
-        "объясняется синтетической природой данных (цена почти линейно от площади), "
-        "а не «силой» самого метода регрессии."
-    )
+    print("=== Обучение моделей на исходных стандартизированных признаках ===")
+    for name, model in models_orig.items():
+        cv_scores = cross_val_score(model, X_train_scaled, y_train, cv=kf, scoring="r2")
+        model.fit(X_train_scaled, y_train)
+        y_pred = model.predict(X_test_scaled)
+        preds_orig[name] = y_pred
 
-    # --- PCA ---
+        results_orig[name] = {
+            "R2_CV_mean": float(cv_scores.mean()),
+            "R2_CV_std": float(cv_scores.std()),
+            "R2_Test": float(r2_score(y_test, y_pred)),
+            "RMSE_Test": float(np.sqrt(mean_squared_error(y_test, y_pred))),
+            "MAPE_Test": float(mean_absolute_percentage_error(y_test, y_pred)),
+            "intercept": float(model.intercept_),
+            "coefficients": {col: float(coef) for col, coef in zip(feature_names, model.coef_)},
+        }
+        print(
+            f"{name:<40} | R^2(CV): {cv_scores.mean():.4f} | "
+            f"R^2(Тест): {results_orig[name]['R2_Test']:.4f} | "
+            f"RMSE: {results_orig[name]['RMSE_Test']:.2f} $ | "
+            f"MAPE: {results_orig[name]['MAPE_Test'] * 100:.2f}%"
+        )
+
     pca_full = PCA().fit(X_train_scaled)
     eigenvalues = pca_full.explained_variance_
     exp_var_ratio = pca_full.explained_variance_ratio_
     cum_var = np.cumsum(exp_var_ratio)
 
-    k_kaiser = int(np.sum(eigenvalues > 1))
-    k_var85 = int(np.argmax(cum_var >= 0.85) + 1)
-
-    print("\n=== Результаты факторного анализа (PCA) ===")
     pca_df = pd.DataFrame({
         "Главная компонента": [f"ГК {i + 1}" for i in range(len(eigenvalues))],
+        "Содержательная подпись": [PC_LABELS.get(i + 1, "—") for i in range(len(eigenvalues))],
         "Собственное значение (Lambda)": eigenvalues,
         "Доля дисперсии": exp_var_ratio,
         "Накопленная дисперсия": cum_var,
     })
+    print("\n=== Результаты факторного анализа (PCA) ===")
     print(pca_df.round(4).to_string(index=False))
-    print(f"По Кайзеру (λ > 1): {k_kaiser} компонент")
-    print(f"По порогу 85% дисперсии: {k_var85} компонент")
 
     fig, axes = plt.subplots(1, 2, figsize=(15, 5))
     axes[0].plot(range(1, len(eigenvalues) + 1), eigenvalues, "bo-", linewidth=2, markersize=7)
-    axes[0].axhline(1.0, color="red", linestyle="--", linewidth=2, label="Критерий Кайзера (λ = 1)")
+    axes[0].axhline(1.0, color="red", linestyle="--", linewidth=2, label="Критерий Кайзера (Lambda = 1.0)")
     axes[0].set_title("График каменистой осыпи (Scree Plot)")
     axes[0].set_xlabel("Номер главной компоненты")
     axes[0].set_ylabel("Собственное значение")
@@ -201,40 +128,41 @@ def main():
     axes[0].legend()
     axes[0].grid(True, alpha=0.3)
 
-    axes[1].plot(range(1, len(cum_var) + 1), cum_var, "ro-", linewidth=2, markersize=7)
-    axes[1].axhline(0.85, color="orange", linestyle="--", label="Порог 85%")
-    axes[1].axvline(k_kaiser, color="green", linestyle=":", label=f"Кайзер: {k_kaiser}")
-    axes[1].axvline(k_var85, color="gray", linestyle=":", label=f"85%: {k_var85}")
-    axes[1].set_title("Кумулятивная объяснённая дисперсия")
+    axes[1].plot(range(1, len(cum_var) + 1), cum_var, "ro-", linewidth=2, markersize=7, label="Накопленная дисперсия")
+    axes[1].axhline(0.85, color="orange", linestyle="--", label="Порог 85% дисперсии")
+    axes[1].set_title("Кумулятивная объясненная дисперсия")
     axes[1].set_xlabel("Количество главных компонент")
-    axes[1].set_ylabel("Доля объяснённой дисперсии")
+    axes[1].set_ylabel("Доля объясненной дисперсии")
     axes[1].set_xticks(range(1, len(cum_var) + 1))
-    axes[1].set_ylim(0, 1.05)
     axes[1].legend()
     axes[1].grid(True, alpha=0.3)
+
     plt.tight_layout()
     if show_plots:
         plt.show()
     plt.close()
 
-    # Подписи строим из нагрузок ПОСЛЕ PCA (не заранее)
-    pca_for_labels = PCA(n_components=k_var85).fit(X_train_scaled)
-    loadings_full = pd.DataFrame(
-        pca_for_labels.components_.T,
-        columns=[f"ГК {i + 1}" for i in range(k_var85)],
+    k_opt = int(np.argmax(cum_var >= 0.85) + 1)
+    pca_opt = PCA(n_components=k_opt).fit(X_train_scaled)
+    pca_feature_names = [f"ГК {i + 1}: {PC_LABELS[i + 1]}" for i in range(k_opt)]
+    loadings = pd.DataFrame(
+        pca_opt.components_.T,
+        columns=[f"ГК {i + 1}" for i in range(k_opt)],
         index=feature_names,
     )
-    pc_labels = {}
-    print("\n=== Подписи ГК, полученные из факторных нагрузок ===")
-    print(loadings_full.round(3).to_string())
-    for i in range(k_var85):
-        title, detail = label_component(loadings_full[f"ГК {i + 1}"])
-        pc_labels[i + 1] = title
-        print(f"ГК {i + 1} — «{title}»: {detail}")
+
+    print("\n=== Факторные нагрузки (как читать каждую ГК) ===")
+    print(loadings.round(3).to_string())
+    for i in range(k_opt):
+        col = f"ГК {i + 1}"
+        top = loadings[col].abs().sort_values(ascending=False).head(3)
+        signed = loadings[col].loc[top.index]
+        parts = [f"{name} ({val:+.2f})" for name, val in signed.items()]
+        print(f"{col} — «{PC_LABELS[i + 1]}»: {', '.join(parts)}")
 
     plt.figure(figsize=(11, 6))
-    sns.heatmap(loadings_full, annot=True, fmt=".2f", cmap="coolwarm", center=0, linewidths=0.5)
-    plt.title(f"Факторные нагрузки первых {k_var85} главных компонент")
+    sns.heatmap(loadings, annot=True, fmt=".2f", cmap="coolwarm", center=0, linewidths=0.5)
+    plt.title(f"Факторные нагрузки первых {k_opt} главных компонент")
     plt.ylabel("Исходные признаки")
     plt.xlabel("Главные компоненты")
     plt.tight_layout()
@@ -242,29 +170,47 @@ def main():
         plt.show()
     plt.close()
 
-    # Сравнение 3 ГК (Кайзер) и 6 ГК (85%)
-    results_pca_all = {}
-    for k in sorted({k_kaiser, k_var85}):
-        pca_k = PCA(n_components=k).fit(X_train_scaled)
-        X_tr_k = pca_k.transform(X_train_scaled)
-        X_te_k = pca_k.transform(X_test_scaled)
-        names_k = [f"ГК {i + 1}: {pc_labels.get(i + 1, '—')}" for i in range(k)]
+    X_train_pca = pca_opt.transform(X_train_scaled)
+    X_test_pca = pca_opt.transform(X_test_scaled)
 
-        models_k = {
-            f"Линейная (PCA, {k} ГК)": LinearRegression(),
-            f"Ridge (PCA, {k} ГК, alpha={best_ridge_alpha:g})": Ridge(
-                alpha=best_ridge_alpha, random_state=42
-            ),
-            f"Lasso (PCA, {k} ГК, alpha={best_lasso_alpha:g})": Lasso(
-                alpha=best_lasso_alpha, max_iter=20000, random_state=42
-            ),
+    model_lin_pca = LinearRegression()
+    model_ridge_pca = Ridge(alpha=1.0, random_state=42)
+    model_lasso_pca = Lasso(alpha=1.0, max_iter=10000, random_state=42)
+
+    models_pca = {
+        "Линейная регрессия (на ГК)": model_lin_pca,
+        "Гребневая регрессия (Ridge на ГК, alpha=1)": model_ridge_pca,
+        "Лассо регрессия (Lasso на ГК, alpha=1)": model_lasso_pca,
+    }
+
+    results_pca = {}
+    preds_pca = {}
+
+    print("\n=== Обучение моделей регрессии на главных компонентах ===")
+    for name, model in models_pca.items():
+        cv_scores = cross_val_score(model, X_train_pca, y_train, cv=kf, scoring="r2")
+        model.fit(X_train_pca, y_train)
+        y_pred = model.predict(X_test_pca)
+        preds_pca[name] = y_pred
+
+        results_pca[name] = {
+            "R2_CV_mean": float(cv_scores.mean()),
+            "R2_CV_std": float(cv_scores.std()),
+            "R2_Test": float(r2_score(y_test, y_pred)),
+            "RMSE_Test": float(np.sqrt(mean_squared_error(y_test, y_pred))),
+            "MAPE_Test": float(mean_absolute_percentage_error(y_test, y_pred)),
+            "intercept": float(model.intercept_),
+            "coefficients": {
+                col: float(coef) for col, coef in zip(pca_feature_names, model.coef_)
+            },
         }
-        print(f"\n=== Модели на {k} главных компонентах "
-              f"({'Кайзер' if k == k_kaiser else 'порог 85%'}) ===")
-        res_k, _ = eval_models(models_k, X_tr_k, X_te_k, y_train, y_test, kf, names_k)
-        results_pca_all[k] = res_k
+        print(
+            f"{name:<44} | R^2(CV): {cv_scores.mean():.4f} | "
+            f"R^2(Тест): {results_pca[name]['R2_Test']:.4f} | "
+            f"RMSE: {results_pca[name]['RMSE_Test']:.2f} $ | "
+            f"MAPE: {results_pca[name]['MAPE_Test'] * 100:.2f}%"
+        )
 
-    # Сводная таблица
     summary_rows = []
     for name, res in results_orig.items():
         summary_rows.append({
@@ -275,17 +221,15 @@ def main():
             "RMSE (Тест, $)": res["RMSE_Test"],
             "MAPE (Тест, %)": res["MAPE_Test"] * 100,
         })
-    for k, res_dict in results_pca_all.items():
-        space = f"Главные компоненты ({k}, {'Кайзер' if k == k_kaiser else '85%'})"
-        for name, res in res_dict.items():
-            summary_rows.append({
-                "Модель": name,
-                "Пространство признаков": space,
-                "R^2 (Кросс-вал)": res["R2_CV_mean"],
-                "R^2 (Тест)": res["R2_Test"],
-                "RMSE (Тест, $)": res["RMSE_Test"],
-                "MAPE (Тест, %)": res["MAPE_Test"] * 100,
-            })
+    for name, res in results_pca.items():
+        summary_rows.append({
+            "Модель": name,
+            "Пространство признаков": f"Главные компоненты ({k_opt})",
+            "R^2 (Кросс-вал)": res["R2_CV_mean"],
+            "R^2 (Тест)": res["R2_Test"],
+            "RMSE (Тест, $)": res["RMSE_Test"],
+            "MAPE (Тест, %)": res["MAPE_Test"] * 100,
+        })
 
     summary_df = pd.DataFrame(summary_rows).sort_values(by="R^2 (Тест)", ascending=False).reset_index(drop=True)
     print("\n=== Итоговая сравнительная таблица всех моделей ===")
@@ -296,25 +240,29 @@ def main():
         data=summary_df, x="Модель", y="R^2 (Тест)", ax=axes[0],
         hue="Модель", palette="Blues_r", edgecolor="black", legend=False,
     )
-    axes[0].set_title("Сравнение R^2 (Тест)")
+    axes[0].set_title("Сравнение коэффициента детерминации R^2 (Тест)")
     axes[0].set_xlabel("")
-    axes[0].tick_params(axis="x", rotation=40)
+    axes[0].set_ylabel("R^2")
+    axes[0].tick_params(axis="x", rotation=35)
 
     sns.barplot(
         data=summary_df, x="Модель", y="RMSE (Тест, $)", ax=axes[1],
         hue="Модель", palette="Reds_r", edgecolor="black", legend=False,
     )
-    axes[1].set_title("Сравнение RMSE ($)")
+    axes[1].set_title("Сравнение среднеквадратичной ошибки RMSE ($)")
     axes[1].set_xlabel("")
-    axes[1].tick_params(axis="x", rotation=40)
+    axes[1].set_ylabel("RMSE ($)")
+    axes[1].tick_params(axis="x", rotation=35)
 
     sns.barplot(
         data=summary_df, x="Модель", y="MAPE (Тест, %)", ax=axes[2],
         hue="Модель", palette="Greens_r", edgecolor="black", legend=False,
     )
-    axes[2].set_title("Сравнение MAPE (%)")
+    axes[2].set_title("Сравнение относительной ошибки MAPE (%)")
     axes[2].set_xlabel("")
-    axes[2].tick_params(axis="x", rotation=40)
+    axes[2].set_ylabel("MAPE (%)")
+    axes[2].tick_params(axis="x", rotation=35)
+
     plt.tight_layout()
     if show_plots:
         plt.show()
@@ -324,29 +272,18 @@ def main():
         "датасет": "house_price_regression_dataset.csv",
         "обучающая_выборка": int(X_train.shape[0]),
         "тестовая_выборка": int(X_test.shape[0]),
-        "подбор_гиперпараметров": {
-            "сетка_alpha": alpha_grid["alpha"],
-            "лучший_alpha_Ridge": best_ridge_alpha,
-            "лучший_alpha_Lasso": best_lasso_alpha,
-            "CV_R2_Ridge": float(ridge_search.best_score_),
-            "CV_R2_Lasso": float(lasso_search.best_score_),
-        },
         "модели_на_исходных_признаках": results_orig,
         "факторный_анализ_pca": {
-            "компонент_по_Кайзеру": k_kaiser,
-            "компонент_по_порогу_85": k_var85,
-            "доля_дисперсии_Кайзер": float(cum_var[k_kaiser - 1]),
-            "доля_дисперсии_85": float(cum_var[k_var85 - 1]),
-            "подписи_компонент_из_нагрузок": {f"ГК_{i}": pc_labels[i] for i in pc_labels},
+            "количество_компонент": k_opt,
+            "доля_накопленной_дисперсии": float(cum_var[k_opt - 1]),
+            "подписи_компонент": {f"ГК_{i + 1}": PC_LABELS[i + 1] for i in range(k_opt)},
             "собственные_значения": [float(e) for e in eigenvalues],
             "факторные_нагрузки": {
-                col: {f"ГК_{i + 1}": float(loadings_full.loc[col, f"ГК {i + 1}"]) for i in range(k_var85)}
+                col: {f"ГК_{i + 1}": float(loadings.loc[col, f"ГК {i + 1}"]) for i in range(k_opt)}
                 for col in feature_names
             },
         },
-        "модели_на_главных_компонентах": {
-            f"{k}_ГК": results_pca_all[k] for k in results_pca_all
-        },
+        "модели_на_главных_компонентах": results_pca,
     }
 
     with open("laba1_model_weights.json", "w", encoding="utf-8") as f:
